@@ -1,0 +1,275 @@
+// Popup script for extension
+document.addEventListener('DOMContentLoaded', () => {
+  const micBtn = document.getElementById('mic-btn');
+  const statusText = document.getElementById('status-text');
+  const sourceLangSelect = document.getElementById('source-lang');
+  const targetLangSelect = document.getElementById('target-lang');
+  const swapBtn = document.getElementById('swap-languages');
+  const sidebarToggle = document.getElementById('sidebar-toggle');
+  const autoTranslateToggle = document.getElementById('auto-translate-toggle');
+
+  let isActive = false;
+  let currentTab = null;
+
+  // Get current active tab
+  const initializeExtension = async () => {
+    try {
+      const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+      currentTab = tabs[0];
+      console.log('Current tab:', currentTab.url);
+      
+      // Check if we're on Google Meet
+      if (!currentTab.url.includes('meet.google.com')) {
+        statusText.textContent = 'Please open Google Meet';
+        micBtn.style.opacity = '0.5';
+        micBtn.style.cursor = 'not-allowed';
+        return;
+      }
+
+      // Try to initialize content script
+      await initializeContentScript();
+    } catch (error) {
+      console.error('Error initializing extension:', error);
+      showStatus('Failed to initialize extension', 'error');
+    }
+  };
+
+  const initializeContentScript = async () => {
+    try {
+      const isLoaded = await checkContentScript();
+      if (!isLoaded) {
+        console.log('Content script not loaded, attempting to inject...');
+        await injectContentScript();
+        // Wait for the script to initialize
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
+
+      // Check translator status
+      const status = await getTranslatorStatus();
+      if (status && status.isActive) {
+        isActive = true;
+        updateMicButton();
+      }
+    } catch (error) {
+      console.error('Error initializing content script:', error);
+      statusText.textContent = 'Failed to load extension. Please refresh the page.';
+      micBtn.style.opacity = '0.5';
+      micBtn.style.cursor = 'not-allowed';
+    }
+  };
+
+  const checkContentScript = () => {
+    return new Promise((resolve) => {
+      chrome.tabs.sendMessage(currentTab.id, { action: 'ping' }, response => {
+        resolve(!chrome.runtime.lastError && response);
+      });
+    });
+  };
+
+  const injectContentScript = async () => {
+    try {
+      // Inject styles first
+      await chrome.scripting.insertCSS({
+        target: { tabId: currentTab.id },
+        files: ['styles.css']
+      });
+
+      // Then inject the content script
+      await chrome.scripting.executeScript({
+        target: { tabId: currentTab.id },
+        files: ['content.js']
+      });
+
+      console.log('Content script injected successfully');
+      return true;
+    } catch (error) {
+      console.error('Failed to inject content script:', error);
+      return false;
+    }
+  };
+
+  const getTranslatorStatus = () => {
+    return new Promise((resolve) => {
+      chrome.tabs.sendMessage(currentTab.id, { action: 'getStatus' }, (response) => {
+        resolve(response);
+      });
+    });
+  };
+
+  // Load saved settings
+  chrome.storage.sync.get([
+    'sourceLanguage', 
+    'targetLanguage', 
+    'showSidebar', 
+    'autoTranslate'
+  ], (result) => {
+    if (result.sourceLanguage) sourceLangSelect.value = result.sourceLanguage;
+    if (result.targetLanguage) targetLangSelect.value = result.targetLanguage;
+    if (result.showSidebar !== undefined) {
+      updateToggle(sidebarToggle, result.showSidebar);
+    }
+    if (result.autoTranslate !== undefined) {
+      updateToggle(autoTranslateToggle, result.autoTranslate);
+    }
+  });
+
+  // Language selection handlers
+  sourceLangSelect.addEventListener('change', saveSettings);
+  targetLangSelect.addEventListener('change', saveSettings);
+
+  // Swap languages
+  swapBtn.addEventListener('click', () => {
+    const sourceValue = sourceLangSelect.value;
+    const targetValue = targetLangSelect.value;
+    
+    // Convert between speech recognition codes and translation codes
+    const langMap = {
+      'en-US': 'en', 'es-ES': 'es', 'fr-FR': 'fr', 'de-DE': 'de',
+      'it-IT': 'it', 'pt-PT': 'pt', 'ru-RU': 'ru', 'ja-JP': 'ja',
+      'ko-KR': 'ko', 'zh-CN': 'zh', 'hi-IN': 'hi', 'ar-SA': 'ar'
+    };
+    
+    const reverseMap = Object.fromEntries(
+      Object.entries(langMap).map(([k, v]) => [v, k])
+    );
+    
+    sourceLangSelect.value = reverseMap[targetValue] || 'en-US';
+    targetLangSelect.value = langMap[sourceValue] || 'en';
+    
+    saveSettings();
+  });
+
+  // Toggle switches
+  sidebarToggle.addEventListener('click', () => {
+    toggleSwitch(sidebarToggle);
+    saveSettings();
+  });
+
+  autoTranslateToggle.addEventListener('click', () => {
+    toggleSwitch(autoTranslateToggle);
+    saveSettings();
+  });
+
+  // Main mic button
+  micBtn.addEventListener('click', async () => {
+    if (!currentTab || !currentTab.url.includes('meet.google.com')) {
+      showStatus('Please open Google Meet first', 'error');
+      return;
+    }
+
+    try {
+      const isScriptLoaded = await checkContentScript();
+      if (!isScriptLoaded) {
+        await initializeContentScript();
+      }
+
+      await proceedWithTranslation();
+    } catch (error) {
+      console.error('Error handling mic click:', error);
+      showStatus('Failed to start translation', 'error');
+    }
+  });
+
+  async function proceedWithTranslation() {
+    isActive = !isActive;
+    
+    const settings = {
+      sourceLanguage: sourceLangSelect.value,
+      targetLanguage: targetLangSelect.value,
+      showSidebar: sidebarToggle.classList.contains('active'),
+      autoTranslate: autoTranslateToggle.classList.contains('active')
+    };
+    
+    console.log('Sending message to content script:', {
+      action: isActive ? 'startTranslation' : 'stopTranslation',
+      settings
+    });
+    
+    try {
+      const response = await new Promise((resolve) => {
+        chrome.tabs.sendMessage(currentTab.id, {
+          action: isActive ? 'startTranslation' : 'stopTranslation',
+          settings
+        }, resolve);
+      });
+
+      if (response && response.success) {
+        updateMicButton();
+      } else {
+        isActive = false;
+        const errorMsg = response ? response.error || 'Unknown error' : 'No response from content script';
+        throw new Error(errorMsg);
+      }
+    } catch (error) {
+      console.error('Failed to start translator:', error);
+      showStatus(`Failed to start translator: ${error.message}`, 'error');
+      isActive = false;
+    }
+  }
+
+  function updateMicButton() {
+    if (isActive) {
+      micBtn.classList.add('recording');
+      statusText.textContent = 'Translating...';
+      document.querySelector('.action-text').textContent = 'Click to stop';
+    } else {
+      micBtn.classList.remove('recording');
+      statusText.textContent = 'Ready to translate';
+      document.querySelector('.action-text').textContent = 'Click to start listening';
+    }
+  }
+
+  function toggleSwitch(toggle) {
+    toggle.classList.toggle('active');
+  }
+
+  function updateToggle(toggle, isActive) {
+    if (isActive) {
+      toggle.classList.add('active');
+    } else {
+      toggle.classList.remove('active');
+    }
+  }
+
+  function saveSettings() {
+    const settings = {
+      sourceLanguage: sourceLangSelect.value,
+      targetLanguage: targetLangSelect.value,
+      showSidebar: sidebarToggle.classList.contains('active'),
+      autoTranslate: autoTranslateToggle.classList.contains('active')
+    };
+
+    chrome.storage.sync.set(settings);
+
+    // Notify content script if active
+    if (isActive && currentTab) {
+      chrome.tabs.sendMessage(currentTab.id, {
+        action: 'updateSettings',
+        settings: settings
+      });
+    }
+  }
+
+  function showStatus(message, type) {
+    // Create temporary status element
+    const status = document.createElement('div');
+    status.style.cssText = `
+      position: fixed;
+      top: 10px;
+      left: 50%;
+      transform: translateX(-50%);
+      padding: 8px 16px;
+      border-radius: 4px;
+      font-size: 12px;
+      z-index: 1000;
+      ${type === 'success' ? 'background: #10b981; color: white;' : 'background: #ef4444; color: white;'}
+    `;
+    status.textContent = message;
+    document.body.appendChild(status);
+    
+    setTimeout(() => status.remove(), 3000);
+  }
+
+  // Initialize the extension
+  initializeExtension();
+});

@@ -1,0 +1,508 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      width: 350px;
+      height: 500px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: linear-gradient(135deg, #1a1a1a 0%, #2d2d2d 100%);
+      color: white;
+      padding: 0;
+      overflow: hidden;
+      font-size: 14px; /* Base font size */
+      transition: all 0.3s ease;
+    }
+
+    /* Font Size Classes */
+    body.small { font-size: 12px; }
+    body.medium { font-size: 14px; }
+    body.large { font-size: 16px; }
+
+    /* High Contrast Mode */
+    body.high-contrast {
+      background: #000000 !important;
+      color: #ffffff !important;
+    }
+
+    body.high-contrast .header {
+      background: #000000 !important;
+      border-color: #ffd700 !important;
+    }
+
+    body.high-contrast select,
+    body.high-contrast .swap-btn,
+    body.high-contrast .toggle-switch,
+    body.high-contrast .clear-btn {
+      background: #000000 !important;
+      color: #ffffff !important;
+      border-color: #ffd700 !important;
+    }
+
+    body.high-contrast .toggle-switch.active {
+      background: #ffd700 !important;
+    }
+
+    body.high-contrast .mic-btn {
+      background: #000000 !important;
+      border: 2px solid #ffd700 !important;
+      color: #ffd700 !important;
+    }
+
+    body.high-contrast .settings-section,
+    body.high-contrast .conversation-history,
+    body.high-contrast .footer {
+      border-color: #ffd700 !important;
+    }
+    
+    .header {
+      text-align: center;
+      padding: 20px 20px 16px;
+      background: rgba(255, 255, 255, 0.05);
+      backdrop-filter: blur(10px);
+      border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    }
+    
+    .header h1 {
+      font-size: 1.3em; /* Responsive to font size changes */
+      margin: 0 0 6px 0;
+      font-weight: 600;
+    }
+    
+    .header p {
+      font-size: 0.85em; /* Responsive to font size changes */
+      opacity: 0.7;
+    }
+    
+    .content {
+      padding: 20px;
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+    }
+    
+    .language-section {
+      margin-bottom: 20px;
+    }
+    
+    .language-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+    
+    .language-select {
+      flex: 1;
+    }
+    
+    label {
+      display: block;
+      margin-bottom: 4px;
+      font-weight: 500;
+      font-size: 0.8em; /* Responsive to font size changes */
+      opacity: 0.7;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    
+    select {
+      width: 100%;
+      padding: 8px 10px;
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      border-radius: 6px;
+      font-size: 0.85em; /* Responsive to font size changes */
+      background: #1a1a1a;
+      color: white;
+      cursor: pointer;
+    }
+    
+    select:focus {
+      outline: none;
+      border-color: rgba(255, 255, 255, 0.4);
+    }
+
+    select option {
+      background: #1a1a1a;
+      color: white;
+      padding: 8px;
+    }
+    
+    .swap-btn {
+      background: rgba(255, 255, 255, 0.1);
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      border-radius: 6px;
+      width: 32px;
+      height: 32px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      color: white;
+      font-size: 0.85em; /* Responsive to font size changes */
+      transition: all 0.3s ease;
+    }
+
+    .swap-btn:hover {
+      background: rgba(255, 255, 255, 0.2);
+    }
+
+    .main-controls {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      text-align: center;
+      margin: 20px 0;
+    }
+    
+    .mic-btn {
+      width: 60px;
+      height: 60px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, #10b981, #059669);
+      border: none;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.4em; /* Responsive to font size changes */
+      color: white;
+      margin: 0 auto 12px;
+      box-shadow: 0 6px 15px rgba(16, 185, 129, 0.3);
+      transition: all 0.3s ease;
+    }
+    
+    .mic-btn:hover {
+      transform: scale(1.05);
+      box-shadow: 0 8px 20px rgba(16, 185, 129, 0.4);
+    }
+    
+    .mic-btn.recording {
+      background: linear-gradient(135deg, #ef4444, #dc2626);
+      animation: pulse 1.5s infinite;
+    }
+    
+    @keyframes pulse {
+      0% { transform: scale(1); }
+      50% { transform: scale(1.05); }
+      100% { transform: scale(1); }
+    }
+    
+    .status-text {
+      font-size: 1.1em; /* Responsive to font size changes */
+      opacity: 0.9;
+      margin-bottom: 8px;
+      text-align: center;
+      font-weight: 500;
+    }
+    
+    .action-text {
+      font-size: 0.85em; /* Responsive to font size changes */
+      opacity: 0.7;
+      text-align: center;
+    }
+    
+    .settings-section {
+      border-top: 1px solid rgba(255, 255, 255, 0.1);
+      padding-top: 16px;
+      margin-bottom: 16px;
+    }
+    
+    .settings-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 10px;
+    }
+    
+    .settings-label {
+      font-size: 0.8em; /* Responsive to font size changes */
+      opacity: 0.8;
+    }
+    
+    .toggle-switch {
+      position: relative;
+      width: 36px;
+      height: 20px;
+      background: rgba(255, 255, 255, 0.2);
+      border-radius: 10px;
+      cursor: pointer;
+      transition: all 0.3s ease;
+    }
+    
+    .toggle-switch.active {
+      background: rgba(16, 185, 129, 0.8);
+    }
+    
+    .toggle-slider {
+      position: absolute;
+      top: 2px;
+      left: 2px;
+      width: 16px;
+      height: 16px;
+      background: white;
+      border-radius: 50%;
+      transition: all 0.3s ease;
+    }
+    
+    .toggle-switch.active .toggle-slider {
+      transform: translateX(16px);
+    }
+
+    .conversation-history {
+      flex: 1;
+      border-top: 1px solid rgba(255, 255, 255, 0.1);
+      padding-top: 12px;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .history-header {
+      font-size: 0.8em; /* Responsive to font size changes */
+      font-weight: 600;
+      opacity: 0.7;
+      margin-bottom: 8px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .history-content {
+      flex: 1;
+      overflow-y: auto;
+      font-size: 0.8em; /* Responsive to font size changes */
+      line-height: 1.4;
+    }
+
+    .history-line {
+      margin-bottom: 6px;
+      word-wrap: break-word;
+      opacity: 0.4;
+      transition: opacity 0.3s ease;
+    }
+
+    .history-line.current {
+      opacity: 1;
+      font-weight: 500;
+    }
+
+    .history-line.recent {
+      opacity: 0.7;
+    }
+
+    .history-line.translation {
+      color: #10b981;
+      margin-left: 8px;
+    }
+
+    .history-line.silence {
+      color: rgba(255, 255, 255, 0.3);
+      font-style: italic;
+    }
+
+    .speaker-label {
+      color: #fbbf24;
+      font-weight: 600;
+      font-size: 0.9em;
+      margin-right: 4px;
+    }
+
+    body.high-contrast .speaker-label {
+      color: #ffd700;
+    }
+
+    .clear-btn {
+      background: rgba(255, 255, 255, 0.1);
+      color: white;
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      padding: 6px 12px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 0.7em; /* Responsive to font size changes */
+      width: 100%;
+      margin-top: 8px;
+      transition: all 0.3s ease;
+    }
+    
+    .clear-btn:hover {
+      background: rgba(255, 255, 255, 0.2);
+    }
+    
+    .footer {
+      text-align: center;
+      padding: 12px;
+      font-size: 0.6em; /* Responsive to font size changes */
+      opacity: 0.5;
+      border-top: 1px solid rgba(255, 255, 255, 0.1);
+    }
+
+    /* Tooltip styles for accessibility */
+    [title] {
+      position: relative;
+    }
+
+    /* Focus styles for better accessibility */
+    button:focus, select:focus, .toggle-switch:focus {
+      outline: 2px solid #10b981;
+      outline-offset: 2px;
+    }
+
+    body.high-contrast button:focus,
+    body.high-contrast select:focus,
+    body.high-contrast .toggle-switch:focus {
+      outline-color: #ffd700;
+    }
+
+    ::-webkit-scrollbar {
+      width: 4px;
+    }
+
+    ::-webkit-scrollbar-track {
+      background: rgba(255, 255, 255, 0.1);
+    }
+
+    ::-webkit-scrollbar-thumb {
+      background: rgba(255, 255, 255, 0.3);
+      border-radius: 2px;
+    }
+
+    body.high-contrast ::-webkit-scrollbar-thumb {
+      background: #ffd700;
+    }
+
+    /* ARIA live region for screen readers */
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>🌐 Voice Translator</h1>
+    <p>Real-time translation for meetings</p>
+  </div>
+  
+  <div class="content">
+    <div class="language-section">
+      <div class="language-row">
+        <div class="language-select">
+          <label for="source-lang">From</label>
+          <p id="detected-lang" style="font-size: 0.8em; opacity: 0.6; margin-bottom: 4px;">Auto-detecting...</p>
+          <select id="source-lang" aria-label="Source language">
+            <option value="auto">Not Known (Auto Detect)</option>
+            <option value="en-US">English (US)</option>
+            <option value="es-ES">Spanish</option>
+            <option value="fr-FR">French</option>
+            <option value="de-DE">German</option>
+            <option value="it-IT">Italian</option>
+            <option value="pt-PT">Portuguese</option>
+            <option value="ru-RU">Russian</option>
+            <option value="ja-JP">Japanese</option>
+            <option value="ko-KR">Korean</option>
+            <option value="zh-CN">Chinese</option>
+            <option value="hi-IN">Hindi</option>
+            <option value="ar-SA">Arabic</option>
+          </select>
+        </div>
+        
+        <button class="swap-btn" id="swap-languages" title="Swap languages (Alt+W)" aria-label="Swap source and target languages">⇄</button>
+        
+        <div class="language-select">
+          <label for="target-lang">To</label>
+          <select id="target-lang" aria-label="Target language">
+            <option value="es">Spanish</option>
+            <option value="en">English</option>
+            <option value="fr">French</option>
+            <option value="de">German</option>
+            <option value="it">Italian</option>
+            <option value="pt">Portuguese</option>
+            <option value="ru">Russian</option>
+            <option value="ja">Japanese</option>
+            <option value="ko">Korean</option>
+            <option value="zh">Chinese</option>
+            <option value="hi">Hindi</option>
+            <option value="ar">Arabic</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <div class="main-controls">
+      <button class="mic-btn" id="mic-btn" title="Start/Stop translation (Alt+S)" aria-label="Start or stop voice translation">🎤</button>
+      <div class="status-text" id="status-text" aria-live="polite">Ready to translate</div>
+      <div class="action-text">Click to start listening</div>
+    </div>
+
+    <div class="settings-section">
+      <div class="settings-row">
+        <span class="settings-label">Show floating box</span>
+        <div class="toggle-switch active" id="sidebar-toggle" role="switch" aria-checked="true" aria-label="Toggle floating box display" tabindex="0">
+          <div class="toggle-slider"></div>
+        </div>
+      </div>
+      <div class="settings-row">
+        <span class="settings-label">Auto-translate</span>
+        <div class="toggle-switch active" id="auto-translate-toggle" role="switch" aria-checked="true" aria-label="Toggle automatic translation" tabindex="0">
+          <div class="toggle-slider"></div>
+        </div>
+      </div>
+      <!-- Add the missing speaker diarization toggle -->
+      <div class="settings-row">
+        <span class="settings-label">Speaker identification</span>
+        <div class="toggle-switch active" id="speaker-toggle" role="switch" aria-checked="true" aria-label="Toggle speaker identification" tabindex="0">
+          <div class="toggle-slider"></div>
+        </div>
+      </div>
+      <div class="settings-row">
+        <span class="settings-label">High Contrast</span>
+        <div class="toggle-switch" id="contrast-toggle" role="switch" aria-checked="false" aria-label="Toggle high contrast mode" tabindex="0">
+          <div class="toggle-slider"></div>
+        </div>
+      </div>
+      
+      <div class="settings-row">
+        <label for="font-size" class="settings-label">Font Size</label>
+        <select id="font-size" aria-label="Select font size">
+          <option value="small">Small</option>
+          <option value="medium" selected>Medium</option>
+          <option value="large">Large</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="conversation-history">
+      <div class="history-header">Recent Conversations</div>
+      <div class="history-content" id="history-content" aria-live="polite" aria-label="Conversation history">
+        <div class="history-line">No conversations yet...</div>
+      </div>
+      <button class="clear-btn" id="clear-history" title="Clear conversation history (Alt+C)" aria-label="Clear conversation history">Clear History</button>
+    </div>
+  </div>
+  
+  <button class="clear-btn" id="download-summary" aria-label="Download conversation summary">Download Summary</button>
+  <button class="clear-btn" id="download-full" title="Download full transcript (Alt+D)" aria-label="Download full transcript">Download Full Transcript</button>
+
+  <div class="footer">
+    Make sure you're on Google Meet to use
+  </div>
+
+  <!-- Screen reader announcements -->
+  <div id="sr-announcements" class="sr-only" aria-live="assertive" aria-atomic="true"></div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

@@ -1,0 +1,227 @@
+// Popup script for extension
+document.addEventListener('DOMContentLoaded', () => {
+  const micBtn = document.getElementById('mic-btn');
+  const statusText = document.getElementById('status-text');
+  const sourceLangSelect = document.getElementById('source-lang');
+  const targetLangSelect = document.getElementById('target-lang');
+  const swapBtn = document.getElementById('swap-languages');
+  const sidebarToggle = document.getElementById('sidebar-toggle');
+  const autoTranslateToggle = document.getElementById('auto-translate-toggle');
+
+  let isActive = false;
+  let currentTab = null;
+
+  // Initialize extension
+  function initialize() {
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      currentTab = tabs[0];
+      console.log('Current tab:', currentTab.url);
+      
+      if (!currentTab.url.includes('meet.google.com')) {
+        statusText.textContent = 'Please open Google Meet';
+        micBtn.style.opacity = '0.5';
+        micBtn.style.cursor = 'not-allowed';
+        return;
+      }
+      
+      checkAndInjectContentScript();
+    });
+  }
+
+  function checkAndInjectContentScript() {
+    chrome.tabs.sendMessage(currentTab.id, { action: 'ping' }, (response) => {
+      if (chrome.runtime.lastError) {
+        injectContentScript();
+      } else {
+        checkTranslatorStatus();
+      }
+    });
+  }
+
+  function injectContentScript() {
+    chrome.scripting.insertCSS({
+      target: { tabId: currentTab.id },
+      files: ['styles.css']
+    }, () => {
+      if (chrome.runtime.lastError) {
+        showStatus('Failed to load extension styles', 'error');
+        return;
+      }
+
+      chrome.scripting.executeScript({
+        target: { tabId: currentTab.id },
+        files: ['content.js']
+      }, () => {
+        if (chrome.runtime.lastError) {
+          showStatus('Failed to load extension. Please refresh the page.', 'error');
+          return;
+        }
+
+        setTimeout(checkTranslatorStatus, 1000);
+      });
+    });
+  }
+
+  function checkTranslatorStatus() {
+    chrome.tabs.sendMessage(currentTab.id, { action: 'getStatus' }, (response) => {
+      if (response && response.isActive) {
+        isActive = true;
+        updateMicButton();
+      }
+    });
+  }
+
+  // Load saved settings
+  chrome.storage.sync.get([
+    'sourceLanguage', 
+    'targetLanguage', 
+    'showSidebar', 
+    'autoTranslate'
+  ], (result) => {
+    if (result.sourceLanguage) sourceLangSelect.value = result.sourceLanguage;
+    if (result.targetLanguage) targetLangSelect.value = result.targetLanguage;
+    if (result.showSidebar !== undefined) {
+      updateToggle(sidebarToggle, result.showSidebar);
+    }
+    if (result.autoTranslate !== undefined) {
+      updateToggle(autoTranslateToggle, result.autoTranslate);
+    }
+  });
+
+  // Event Listeners
+  sourceLangSelect.addEventListener('change', saveSettings);
+  targetLangSelect.addEventListener('change', saveSettings);
+
+  swapBtn.addEventListener('click', () => {
+    const sourceValue = sourceLangSelect.value;
+    const targetValue = targetLangSelect.value;
+    
+    const langMap = {
+      'en-US': 'en', 'es-ES': 'es', 'fr-FR': 'fr', 'de-DE': 'de',
+      'it-IT': 'it', 'pt-PT': 'pt', 'ru-RU': 'ru', 'ja-JP': 'ja',
+      'ko-KR': 'ko', 'zh-CN': 'zh', 'hi-IN': 'hi', 'ar-SA': 'ar'
+    };
+    
+    const reverseMap = Object.fromEntries(
+      Object.entries(langMap).map(([k, v]) => [v, k])
+    );
+    
+    sourceLangSelect.value = reverseMap[targetValue] || 'en-US';
+    targetLangSelect.value = langMap[sourceValue] || 'en';
+    
+    saveSettings();
+  });
+
+  sidebarToggle.addEventListener('click', () => {
+    toggleSwitch(sidebarToggle);
+    saveSettings();
+  });
+
+  autoTranslateToggle.addEventListener('click', () => {
+    toggleSwitch(autoTranslateToggle);
+    saveSettings();
+  });
+
+  micBtn.addEventListener('click', () => {
+    if (!currentTab || !currentTab.url.includes('meet.google.com')) {
+      showStatus('Please open Google Meet first', 'error');
+      return;
+    }
+
+    chrome.tabs.sendMessage(currentTab.id, { action: 'ping' }, (response) => {
+      if (chrome.runtime.lastError) {
+        injectContentScript();
+        return;
+      }
+      proceedWithTranslation();
+    });
+  });
+
+  function proceedWithTranslation() {
+    isActive = !isActive;
+    
+    const settings = {
+      sourceLanguage: sourceLangSelect.value,
+      targetLanguage: targetLangSelect.value,
+      showSidebar: sidebarToggle.classList.contains('active'),
+      autoTranslate: autoTranslateToggle.classList.contains('active')
+    };
+    
+    chrome.tabs.sendMessage(currentTab.id, {
+      action: isActive ? 'startTranslation' : 'stopTranslation',
+      settings
+    }, (response) => {
+      if (response && response.success) {
+        updateMicButton();
+      } else {
+        isActive = false;
+        const errorMsg = response ? response.error || 'Unknown error' : 'No response from content script';
+        showStatus(`Failed to start translator: ${errorMsg}`, 'error');
+      }
+    });
+  }
+
+  function updateMicButton() {
+    if (isActive) {
+      micBtn.classList.add('recording');
+      statusText.textContent = 'Translating...';
+      document.querySelector('.action-text').textContent = 'Click to stop';
+    } else {
+      micBtn.classList.remove('recording');
+      statusText.textContent = 'Ready to translate';
+      document.querySelector('.action-text').textContent = 'Click to start listening';
+    }
+  }
+
+  function toggleSwitch(toggle) {
+    toggle.classList.toggle('active');
+  }
+
+  function updateToggle(toggle, isActive) {
+    if (isActive) {
+      toggle.classList.add('active');
+    } else {
+      toggle.classList.remove('active');
+    }
+  }
+
+  function saveSettings() {
+    const settings = {
+      sourceLanguage: sourceLangSelect.value,
+      targetLanguage: targetLangSelect.value,
+      showSidebar: sidebarToggle.classList.contains('active'),
+      autoTranslate: autoTranslateToggle.classList.contains('active')
+    };
+
+    chrome.storage.sync.set(settings);
+
+    if (isActive && currentTab) {
+      chrome.tabs.sendMessage(currentTab.id, {
+        action: 'updateSettings',
+        settings: settings
+      });
+    }
+  }
+
+  function showStatus(message, type) {
+    const status = document.createElement('div');
+    status.style.cssText = `
+      position: fixed;
+      top: 10px;
+      left: 50%;
+      transform: translateX(-50%);
+      padding: 8px 16px;
+      border-radius: 4px;
+      font-size: 12px;
+      z-index: 1000;
+      ${type === 'success' ? 'background: #10b981; color: white;' : 'background: #ef4444; color: white;'}
+    `;
+    status.textContent = message;
+    document.body.appendChild(status);
+    
+    setTimeout(() => status.remove(), 3000);
+  }
+
+  // Start initialization
+  initialize();
+});
