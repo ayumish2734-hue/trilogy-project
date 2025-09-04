@@ -13,6 +13,14 @@ class VoiceTranslator {
     this.FRAMES_PER_BUFFER = 1024;
     this.SAMPLE_RATE = 16000;
     this.CHANNELS = 1;
+    
+    // Enhanced audio detection parameters
+    this.silenceThreshold = 0.005;  // More sensitive threshold
+    this.activeThreshold = 0.003;   // Lower threshold for continuing speech
+    this.lastAudioLevels = new Array(10).fill(0);  // Store recent audio levels
+    this.audioLevelIndex = 0;
+    this.minSilenceDuration = 1000; // Minimum silence duration in ms
+    this.lastAudioTime = Date.now();
     this.recordedFrames = [];
     this.recordingLock = false;
     this.currentSpeaker = null;
@@ -96,13 +104,72 @@ class VoiceTranslator {
     try {
       this.settings.groqApiKey = this.GROQ_API_KEY;
       try {
+        // Specifically for Google Meet, we need to capture the tab with video
         this.mediaStream = await navigator.mediaDevices.getDisplayMedia({
-          audio: { sampleRate: 16000, channelCount: 1, echoCancellation: false, noiseSuppression: false, autoGainControl: false },
-          video: false
+          audio: {
+            autoGainControl: true,
+            echoCancellation: true,
+            noiseSuppression: true,
+            sampleRate: 16000,
+            channelCount: 1
+          },
+          video: {
+            displaySurface: "browser",
+            width: { max: 1 },
+            height: { max: 1 },
+            frameRate: { max: 1 }
+          }
         });
+        
+        // Remove video tracks as we only need audio
+        this.mediaStream.getVideoTracks().forEach(track => {
+          track.stop();
+          this.mediaStream.removeTrack(track);
+        });
+        
+        // Also get microphone audio
+        const micStream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            sampleRate: 16000,
+            channelCount: 1,
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true
+          }
+        });
+
+        // Create audio context for mixing streams
+        const audioContext = new AudioContext({
+          sampleRate: 16000
+        });
+
+        // Create sources for both streams
+        const systemSource = audioContext.createMediaStreamSource(this.mediaStream);
+        const micSource = audioContext.createMediaStreamSource(micStream);
+
+        // Create a merger node to combine the streams
+        const merger = audioContext.createChannelMerger(2);
+        systemSource.connect(merger, 0, 0);
+        micSource.connect(merger, 0, 1);
+
+        // Create a destination node
+        const dest = audioContext.createMediaStreamDestination();
+        merger.connect(dest);
+
+        // Use the combined stream
+        this.mediaStream = dest.stream;
+
       } catch (error) {
+        console.error('Failed to get system audio:', error);
+        // Fallback to just microphone if screen sharing fails
         this.mediaStream = await navigator.mediaDevices.getUserMedia({
-          audio: { sampleRate: 16000, channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+          audio: {
+            sampleRate: 16000,
+            channelCount: 1,
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true
+          }
         });
       }
 
@@ -506,58 +573,386 @@ class VoiceTranslator {
     });
   }
 
-  async setupAudioProcessing() {
+  // Updated audio setup method - replace your existing setupAudioProcessing method
+
+async setupAudioProcessing() {
+  try {
+    console.log('Setting up enhanced audio capture...');
+    
+    // Method 1: Try to capture tab audio (most reliable for Meet)
+    let systemStream = null;
     try {
-      this.audioContext = new AudioContext({ sampleRate: this.SAMPLE_RATE });
-      const source = this.audioContext.createMediaStreamSource(this.mediaStream);
-      await this.audioContext.audioWorklet.addModule(chrome.runtime.getURL('processor.js'));
-      this.processor = new AudioWorkletNode(this.audioContext, 'vt-processor');
-
-      this.processor.port.onmessage = (event) => {
-        if (event.data.type === 'audioData' && this.connectionId) {
-          const inputData = event.data.data;
-
-          // Calculate audio level for better silence detection
-          let sum = 0;
-          for (let i = 0; i < inputData.length; i++) {
-            sum += inputData[i] * inputData[i];
-          }
-          const rms = Math.sqrt(sum / inputData.length);
-          const audioLevel = Math.max(0, Math.min(1, rms * 10)); // Normalize to 0-1
-
-          // Only process if audio level is above threshold
-          if (audioLevel > 0.01) { // Adjust threshold as needed
-            const int16Data = new Int16Array(inputData.length);
-            for (let i = 0; i < inputData.length; i++) {
-              int16Data[i] = Math.max(-32768, Math.min(32767, inputData[i] * 32768));
-            }
-            this.recordAudioFrame(int16Data.buffer);
-            this.sendAudioData(int16Data.buffer);
-            this.handleAudioActivity();
-          }
+      systemStream = await navigator.mediaDevices.getDisplayMedia({
+        audio: {
+          autoGainControl: false,  // Important: disable AGC
+          echoCancellation: false, // Important: disable echo cancellation
+          noiseSuppression: false, // Important: disable noise suppression
+          sampleRate: 48000,       // Higher sample rate for better quality
+          channelCount: 2,         // Stereo capture
+          suppressLocalAudioPlayback: false // Don't suppress local audio
+        },
+        video: {
+          width: { max: 1 },
+          height: { max: 1 },
+          frameRate: { max: 1 }
         }
-      };
+      });
       
-      source.connect(this.processor);
-      this.processor.connect(this.audioContext.destination);
+      console.log('Successfully captured system audio');
+      
+      // Remove video tracks immediately
+      systemStream.getVideoTracks().forEach(track => {
+        track.stop();
+        systemStream.removeTrack(track);
+      });
+      
     } catch (error) {
-      if (this.audioContext && this.audioContext.state !== 'closed') {
-        this.audioContext.close();
-        this.audioContext = null;
-      }
-      throw error;
+      console.warn('Failed to capture system audio:', error);
+      this.showError('Please select "Share tab" and enable "Share audio" for full conversation capture');
     }
+
+    // Method 2: Get microphone audio
+    let micStream = null;
+    try {
+      micStream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          autoGainControl: false,
+          echoCancellation: false,
+          noiseSuppression: false,
+          sampleRate: 48000,
+          channelCount: 1
+        }
+      });
+      console.log('Successfully captured microphone audio');
+    } catch (error) {
+      console.warn('Failed to capture microphone:', error);
+    }
+
+    // Create audio context with higher sample rate
+    this.audioContext = new AudioContext({ 
+      sampleRate: 48000,
+      latencyHint: 'interactive'
+    });
+
+    // Method 3: Enhanced audio processing
+    if (systemStream && micStream) {
+      // Both streams available - mix them
+      console.log('Mixing system and microphone audio...');
+      this.mediaStream = await this.mixAudioStreams(systemStream, micStream);
+    } else if (systemStream) {
+      // Only system audio (Meet participants)
+      console.log('Using system audio only');
+      this.mediaStream = systemStream;
+    } else if (micStream) {
+      // Only microphone (fallback)
+      console.log('Using microphone only - you may miss other participants');
+      this.mediaStream = micStream;
+      this.showError('Only capturing your voice. Enable screen sharing with audio to capture all participants.');
+    } else {
+      throw new Error('No audio streams available');
+    }
+
+    // Set up audio processing
+    const source = this.audioContext.createMediaStreamSource(this.mediaStream);
+    
+    // Create a more sensitive audio processor
+    await this.audioContext.audioWorklet.addModule(chrome.runtime.getURL('processor.js'));
+    this.processor = new AudioWorkletNode(this.audioContext, 'enhanced-vt-processor', {
+      processorOptions: {
+        sampleRate: 48000,
+        frameSize: 4800, // 100ms frames for better voice detection
+        sensitivity: 0.001 // Very sensitive threshold
+      }
+    });
+
+    this.processor.port.onmessage = (event) => {
+      if (event.data.type === 'audioData' && this.connectionId) {
+        const inputData = event.data.data;
+        const audioLevel = event.data.level;
+        
+        // More sensitive voice activity detection
+        if (audioLevel > 0.001) { // Very low threshold
+          // Convert to 16kHz for AssemblyAI
+          const downsampledData = this.downsampleTo16kHz(inputData);
+          const int16Data = new Int16Array(downsampledData.length);
+          
+          for (let i = 0; i < downsampledData.length; i++) {
+            int16Data[i] = Math.max(-32768, Math.min(32767, downsampledData[i] * 32768));
+          }
+          
+          this.recordAudioFrame(int16Data.buffer);
+          this.sendAudioData(int16Data.buffer);
+          this.handleAudioActivity();
+        }
+      }
+    };
+
+    source.connect(this.processor);
+    // Don't connect to destination to avoid feedback
+    
+    console.log('Audio processing setup complete');
+    
+  } catch (error) {
+    console.error('Audio setup failed:', error);
+    if (this.audioContext && this.audioContext.state !== 'closed') {
+      this.audioContext.close();
+      this.audioContext = null;
+    }
+    throw error;
   }
+}
+
+// New method to mix audio streams with proper validation
+async mixAudioStreams(systemStream, micStream) {
+  // Validate both streams have audio tracks
+  const systemAudioTracks = systemStream.getAudioTracks();
+  const micAudioTracks = micStream.getAudioTracks();
+  
+  if (systemAudioTracks.length === 0) {
+    console.warn('System stream has no audio tracks, using mic only');
+    return micStream;
+  }
+  
+  if (micAudioTracks.length === 0) {
+    console.warn('Mic stream has no audio tracks, using system only');
+    return systemStream;
+  }
+  
+  try {
+    const mixerContext = new AudioContext({ sampleRate: 48000 });
+    
+    // Create sources with error handling
+    let systemSource, micSource;
+    
+    try {
+      systemSource = mixerContext.createMediaStreamSource(systemStream);
+      console.log('Created system audio source');
+    } catch (error) {
+      console.error('Failed to create system audio source:', error);
+      throw new Error('System audio source creation failed');
+    }
+    
+    try {
+      micSource = mixerContext.createMediaStreamSource(micStream);
+      console.log('Created microphone audio source');
+    } catch (error) {
+      console.error('Failed to create microphone audio source:', error);
+      // If mic source fails, just return system stream
+      return systemStream;
+    }
+    
+    // Create gain nodes for volume control
+    const systemGain = mixerContext.createGain();
+    const micGain = mixerContext.createGain();
+    
+    // Adjust levels - system audio often needs boosting
+    systemGain.gain.value = 2.0;  // Boost system audio
+    micGain.gain.value = 1.0;     // Normal mic level
+    
+    // Create a simple mixer node instead of channel merger
+    const mixerGain = mixerContext.createGain();
+    mixerGain.gain.value = 0.7; // Reduce overall level to prevent clipping
+    
+    // Connect everything
+    systemSource.connect(systemGain);
+    micSource.connect(micGain);
+    
+    // Mix both sources to the same output
+    systemGain.connect(mixerGain);
+    micGain.connect(mixerGain);
+    
+    // Create output destination
+    const dest = mixerContext.createMediaStreamDestination();
+    mixerGain.connect(dest);
+    
+    // Verify the destination stream has audio tracks
+    const outputTracks = dest.stream.getAudioTracks();
+    if (outputTracks.length === 0) {
+      throw new Error('Mixed stream has no audio tracks');
+    }
+    
+    console.log('Successfully mixed audio streams, output has', outputTracks.length, 'tracks');
+    return dest.stream;
+    
+  } catch (error) {
+    console.error('Audio mixing failed:', error);
+    // Fallback to system stream if mixing fails
+    return systemStream;
+  }
+}
+
+// Helper method to calculate audio level if not provided
+calculateAudioLevel(audioData) {
+  let sum = 0;
+  let peak = 0;
+  for (let i = 0; i < audioData.length; i++) {
+    const abs = Math.abs(audioData[i]);
+    sum += abs * abs;
+    peak = Math.max(peak, abs);
+  }
+  const rms = Math.sqrt(sum / audioData.length);
+  return Math.max(rms * 20, peak * 15);
+}
+
+// New method to downsample from 48kHz to 16kHz
+downsampleTo16kHz(inputData) {
+  const inputSampleRate = 48000;
+  const outputSampleRate = 16000;
+  const ratio = inputSampleRate / outputSampleRate;
+  const outputLength = Math.floor(inputData.length / ratio);
+  const output = new Float32Array(outputLength);
+  
+  for (let i = 0; i < outputLength; i++) {
+    const inputIndex = Math.floor(i * ratio);
+    output[i] = inputData[inputIndex];
+  }
+  
+  return output;
+}
+
+// Updated connection method with better audio settings
+async connectToAssemblyAI() {
+  try {
+    console.log('Connecting to AssemblyAI with enhanced settings...');
+    const response = await fetch(`${this.PROXY_SERVER_URL}/create-connection`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        // Enhanced settings for better voice detection
+        sample_rate: 16000,
+        punctuate: true,
+        format_text: true,
+        disfluencies: false,
+        speaker_labels: true,
+        speakers_expected: 10,
+        dual_channel: true,
+        multichannel: true,        // Process multiple channels
+        audio_features: true,
+        speech_threshold: 0.05,    // Very sensitive speech detection
+        vad_sensitivity: 5,        // Maximum sensitivity
+        endpointing_sensitivity: "lowest", // Most lenient silence detection
+        silence_threshold: 100,    // Very short silence threshold (100ms)
+        utterance_end_ms: 500,     // Short utterance end detection
+        boost_param: "high",       // Boost audio processing
+        redact_pii: false,
+        filter_profanity: false
+      })
+    });
+
+    const result = await response.json();
+    if (!result.success) {
+      throw new Error(result.error || 'Failed to create connection');
+    }
+
+    this.connectionId = result.connectionId;
+    console.log('AssemblyAI connection established:', this.connectionId);
+    
+    // Wait a bit longer for connection to stabilize
+    await new Promise(resolve => setTimeout(resolve, 2000));
+    this.startMessagePolling();
+    return true;
+  } catch (error) {
+    console.error('AssemblyAI connection failed:', error);
+    throw error;
+  }
+}
+
+// Enhanced instructions for better user guidance
+showMeetInstructions() {
+  const instructionsDiv = document.createElement('div');
+  instructionsDiv.style.cssText = `
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    background: rgba(0, 0, 0, 0.95);
+    color: white;
+    padding: 32px;
+    border-radius: 16px;
+    z-index: 1000001;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    font-size: 14px;
+    max-width: 500px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+    text-align: left;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+  `;
+  
+  instructionsDiv.innerHTML = `
+    <div style="text-align: center; margin-bottom: 24px;">
+      <div style="font-size: 24px; margin-bottom: 8px;">🎤</div>
+      <h3 style="margin: 0; color: #60A5FA; font-size: 18px;">Capture All Meeting Audio</h3>
+    </div>
+    
+    <div style="background: rgba(59, 130, 246, 0.1); padding: 16px; border-radius: 8px; margin-bottom: 20px; border-left: 4px solid #60A5FA;">
+      <strong style="color: #60A5FA;">Important:</strong> To capture other participants' voices, you must share your browser tab with audio.
+    </div>
+    
+    <ol style="margin: 0; padding-left: 24px; line-height: 1.6;">
+      <li style="margin-bottom: 12px;"><strong style="color: #60A5FA;">Click "Share tab"</strong> when the browser asks for permissions</li>
+      <li style="margin-bottom: 12px;"><strong style="color: #60A5FA;">Select this Google Meet tab</strong> from the list</li>
+      <li style="margin-bottom: 12px;"><strong style="color: #60A5FA;">✅ Check "Share audio"</strong> - This is crucial!</li>
+      <li style="margin-bottom: 12px;"><strong style="color: #60A5FA;">Click "Share"</strong></li>
+      <li style="margin-bottom: 12px;"><strong style="color: #60A5FA;">Also allow microphone access</strong> when prompted</li>
+    </ol>
+    
+    <div style="background: rgba(34, 197, 94, 0.1); padding: 12px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #22C55E;">
+      <div style="color: #22C55E; font-size: 12px; font-weight: 600;">💡 TIP</div>
+      <div style="font-size: 12px; margin-top: 4px;">With both enabled, the extension will capture everyone's voice in the meeting!</div>
+    </div>
+    
+    <div style="margin-top: 24px; display: flex; justify-content: center;">
+      <button id="vt-instructions-ok" style="
+        background: linear-gradient(135deg, #60A5FA, #3B82F6);
+        border: none;
+        color: white;
+        padding: 12px 24px;
+        border-radius: 8px;
+        cursor: pointer;
+        font-weight: 600;
+        font-size: 14px;
+        transition: all 0.2s ease;
+      ">Start Capturing Audio</button>
+    </div>
+  `;
+  
+  document.body.appendChild(instructionsDiv);
+  
+  document.getElementById('vt-instructions-ok').addEventListener('click', () => {
+    instructionsDiv.remove();
+  });
+  
+  // Auto-remove after 30 seconds
+  setTimeout(() => {
+    if (document.body.contains(instructionsDiv)) {
+      instructionsDiv.remove();
+    }
+  }, 30000);
+}
 
   handleAudioActivity() {
+    const currentTime = Date.now();
     this.isUserSpeaking = true;
+    
+    // Update last audio activity time
+    this.lastAudioTime = currentTime;
+    
+    // Clear any existing silence timer
     if (this.silenceTimer) {
       clearTimeout(this.silenceTimer);
     }
+    
+    // Set a new silence timer with dynamic duration
     this.silenceTimer = setTimeout(() => {
-      this.isUserSpeaking = false;
-      this.addConversationLine('--- Silence ---', 'silence');
-    }, 1500);
+      const timeSinceLastAudio = Date.now() - this.lastAudioTime;
+      
+      // Only mark as silence if enough time has passed
+      if (timeSinceLastAudio >= this.minSilenceDuration) {
+        this.isUserSpeaking = false;
+        // Don't add silence marker anymore
+        // this.addConversationLine('--- Silence ---', 'silence');
+      }
+    }, this.minSilenceDuration);
   }
 
   async connectToAssemblyAI() {
@@ -567,11 +962,15 @@ class VoiceTranslator {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          punctuate: true,        
-          format_text: true,      
-          disfluencies: false,    
-          speaker_labels: true,   // Always enable speaker detection
-          speakers_expected: 5    // Expect up to 5 speakers for better detection
+          punctuate: true,
+          format_text: true,
+          disfluencies: false,
+          speaker_labels: true,
+          speakers_expected: 10,   // Increased expected speakers
+          dual_channel: true,      // Enable dual channel processing
+          audio_features: true,    // Enable additional audio features
+          speech_threshold: 0.2,   // Lower speech detection threshold
+          vad_sensitivity: 3      // Increased Voice Activity Detection sensitivity
         })
       });
 
@@ -918,6 +1317,53 @@ class VoiceTranslator {
     errorDiv.textContent = message;
     document.body.appendChild(errorDiv);
     setTimeout(() => errorDiv.remove(), 5000);
+  }
+
+  showMeetInstructions() {
+    const instructionsDiv = document.createElement('div');
+    instructionsDiv.style.cssText = `
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      background: rgba(0, 0, 0, 0.9);
+      color: white;
+      padding: 24px;
+      border-radius: 12px;
+      z-index: 1000001;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      font-size: 14px;
+      max-width: 400px;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+      text-align: left;
+    `;
+    
+    instructionsDiv.innerHTML = `
+      <h3 style="margin: 0 0 16px 0; color: #60A5FA;">Google Meet Audio Capture Instructions</h3>
+      <ol style="margin: 0; padding-left: 20px; line-height: 1.5;">
+        <li style="margin-bottom: 8px;">When prompted, select <strong style="color: #60A5FA;">"Share tab"</strong></li>
+        <li style="margin-bottom: 8px;">Choose the <strong style="color: #60A5FA;">Google Meet tab</strong></li>
+        <li style="margin-bottom: 8px;">Make sure to check <strong style="color: #60A5FA;">"Share audio"</strong> checkbox</li>
+        <li style="margin-bottom: 8px;">Click <strong style="color: #60A5FA;">"Share"</strong></li>
+      </ol>
+      <div style="margin-top: 16px; display: flex; justify-content: center;">
+        <button id="vt-instructions-ok" style="
+          background: #60A5FA;
+          border: none;
+          color: white;
+          padding: 8px 16px;
+          border-radius: 4px;
+          cursor: pointer;
+          font-weight: 500;
+        ">Got it!</button>
+      </div>
+    `;
+    
+    document.body.appendChild(instructionsDiv);
+    
+    document.getElementById('vt-instructions-ok').addEventListener('click', () => {
+      instructionsDiv.remove();
+    });
   }
 }
 
